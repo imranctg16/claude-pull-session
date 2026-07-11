@@ -1,0 +1,12 @@
+{
+  "name": "imran-plugins",
+  "owner": { "name": "Imran Hossain" },
+  "plugins": [
+    {
+      "name": "pull-session",
+      "source": "./plugins/pull-session",
+      "description": "Pull a summary of another Claude Code session into the current one.",
+      "version": "1.0.0"
+    }
+  ]
+}

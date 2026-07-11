@@ -6,7 +6,7 @@ allowed-tools: Bash(bash:*)
 
 Run the pull-session helper:
 
-!`bash "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/commands/pull-session.sh" $ARGUMENTS`
+!`bash "${CLAUDE_PLUGIN_ROOT}/scripts/pull-session.sh" $ARGUMENTS`
 
 Now act on its output:
 

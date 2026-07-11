@@ -44,7 +44,7 @@ list_sessions() {
     printf '  %s  %s\n       ↳ %s…\n\n' "$ts" "$id" "$(preview "$f")"
   done < <(ls -t "$TDIR"/*.jsonl)
   echo "The newest is usually THIS session. To pull another in:"
-  echo "  /pull-session <session-id>"
+  echo "  /pull-session:pull-session <session-id>"
 }
 
 summarize_session() {
@@ -52,7 +52,7 @@ summarize_session() {
   local f="$TDIR/$id.jsonl"
   if [ ! -f "$f" ]; then
     echo "Session '$id' not found in this project."
-    echo "Run /pull-session with no argument to list available sessions."
+    echo "Run /pull-session:pull-session with no argument to list available sessions."
     exit 1
   fi
   local prompt='You are handing your context off to a DIFFERENT Claude Code session that cannot see your history. In 200-400 words, summarize: (1) the goal/task, (2) key decisions and the reasoning, (3) files created or changed, (4) the current state, (5) open threads / next steps. Be factual and concise. Output ONLY the summary, no preamble.'
