@@ -1,5 +1,6 @@
 {
   "name": "imran-plugins",
+  "description": "Small, focused Claude Code plugins — starting with pull-session (cross-instance session context).",
   "owner": { "name": "Imran Hossain" },
   "plugins": [
     {
