@@ -40,7 +40,15 @@ This repo is a Claude Code marketplace containing the plugin. In any Claude Code
 /plugin install pull-session@imran-plugins
 ```
 
-Then use `/pull-session:pull-session`. Requires `claude`, `bash`, `jq` on PATH.
+Then use `/pull-session:pull-session`.
+
+### Requirements & scope
+
+Needs the **`claude` CLI**, plus **`bash`** and **`jq`** on PATH.
+
+- **Linux / macOS** — works out of the box (`brew install jq` on macOS if needed).
+- **Windows** — works under **WSL** or with **Git for Windows** installed (the slash command runs a `bash` step; without Git Bash, Claude Code falls back to PowerShell and this plugin can't run).
+- Discovers **Claude Code CLI** sessions (the `<config-dir>/projects/*.jsonl` transcripts). It does **not** reach conversations created in the **Claude Desktop app's chat** — those are a separate session store the CLI can't resume. Running the plugin *inside* Desktop's Code tab is fine; it'll still see your CLI sessions.
 
 ## Usage
 
@@ -75,6 +83,7 @@ Arrow to a session, hit **Enter**, and it copies `/pull-session:pull-session <id
 - Pulling **appends a summary turn** to the target session. Harmless when idle; for a **live** session it can interleave with the running instance, so live sessions need `--force`.
 - **No pre-merge compaction from outside.** Claude Code's `/compact` is interactive-only — there's no headless way to compact a session you're not in. To shrink a live session before merging, run `/compact` in *its* terminal first; this tool will remind you.
 - Cross-instance labels reflect the config dirs as seen from the running instance.
+- **CLI sessions only.** The Claude Desktop app keeps its chat sessions in a separate store that `claude -p --resume` can't address, so Desktop conversations won't appear in the list (see *Requirements & scope*).
 
 ## Config (env vars)
 
