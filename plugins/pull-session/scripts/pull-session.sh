@@ -77,6 +77,9 @@ project_label() { # accurate cwd from the transcript, fallback to the dashed has
   [ -n "$cwd" ] && { basename "$cwd"; return; }
   basename "$(dirname "$f")"
 }
+session_cwd()    { local f="$1" c; c="$(grep -m1 -oE '"cwd":"[^"]+"' "$f" 2>/dev/null | head -1 | sed 's/.*"cwd":"//;s/".*//')"; [ -n "$c" ] && printf '%s' "$c" || printf '(%s)' "$(basename "$(dirname "$f")")"; }
+session_branch() { local b; b="$(grep -m1 -oE '"gitBranch":"[^"]*"' "$1" 2>/dev/null | head -1 | sed 's/.*"gitBranch":"//;s/".*//')"; printf '%s' "${b:-—}"; }
+session_size()   { du -h "$1" 2>/dev/null | cut -f1 || echo '?'; }
 preview() {
   local f="$1" msg=""
   msg="$(grep -m1 '"type":"user"' "$f" 2>/dev/null \
@@ -98,8 +101,9 @@ list_sessions() {
     local flag ts
     if is_live "$m"; then flag="● live"; else flag="  idle"; fi
     ts="$(fmtdate "$m")"
-    printf '  [%d] %s  %s  %s · %s\n        ↳ %s…\n\n' \
-      "$i" "$flag" "$ts" "$(instance_label "$root")" "$(project_label "$f")" "$(preview "$f")"
+    printf '  [%d] %s  %s   %s · branch %s · %s\n       %s\n       ↳ %s…\n\n' \
+      "$i" "$flag" "$ts" "$(instance_label "$root")" "$(session_branch "$f")" "$(session_size "$f")" \
+      "$(session_cwd "$f")" "$(preview "$f")"
   done
   echo "Pull one in:  /pull-session:pull-session <number>   (or a session id)"
   echo "● live = written in the last ${LIVE_WINDOW}s. Pulling a live one needs --force,"
