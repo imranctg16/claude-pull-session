@@ -48,6 +48,19 @@ Then use `/pull-session:pull-session`. Requires `claude`, `bash`, `jq` on PATH.
 - `/pull-session:pull-session <number|id>` — pull that session's summary into the current one.
 - `/pull-session:pull-session <number|id> --force` — pull a **live** session anyway (see caveats).
 
+Don't want to eyeball a number? After the list, just **tell Claude which one** ("pull the Job Portal one", "the live one") — it'll run the pull.
+
+### Arrow-key picker (terminal)
+
+Arrow-key selection can't run *inside* the slash command — Claude Code owns the keyboard during a `!` step. For a real fzf picker, run the bundled script in your **own terminal**:
+
+```bash
+bash /path/to/claude-pull-session/plugins/pull-session/scripts/pull-session.sh pick
+# handy: alias pspick='bash /path/to/.../pull-session.sh pick'
+```
+
+Arrow to a session, hit **Enter**, and it copies `/pull-session:pull-session <id>` to your clipboard — paste that into your Claude session to pull it. Requires `fzf` (optional; only for `pick`; uses `pbcopy`/`wl-copy`/`xclip` if present).
+
 ## How it discovers sessions
 
 - Scans config dirs that contain a `projects/` dir: `$PULL_SESSION_DIRS` (colon-separated override) · `${CLAUDE_CONFIG_DIR:-~/.claude}` · `~/.claude`, `~/.claude-*`, and the same one level up (to catch HOME-swapped instances). There's no registry of instances in Claude Code, so scanning is the intended approach.

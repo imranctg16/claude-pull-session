@@ -149,8 +149,34 @@ summarize() {
   echo "=== END PULLED CONTEXT ==="
 }
 
-if [ "$#" -eq 0 ] || [ -z "${1:-}" ]; then
-  list_sessions
-else
-  summarize "$1" "${2:-}"
-fi
+pick_session() { # interactive arrow-key picker — TERMINAL ONLY (needs a TTY; can't run inside the slash command)
+  command -v fzf >/dev/null 2>&1 || { echo "The 'pick' mode needs fzf — install it (brew install fzf / apt install fzf)."; exit 1; }
+  local rec m root f sid flag menu choice cmd copied=""
+  menu="$(
+    for rec in "${RECORDS[@]}"; do
+      IFS=$'\t' read -r m root f <<< "$rec"
+      sid="$(basename "$f" .jsonl)"; flag="idle"; is_live "$m" && flag="● live"
+      printf '%s\t%s  %s  %s · %s · %s  |  %s  ↳ %s\n' \
+        "$sid" "$flag" "$(fmtdate "$m")" "$(instance_label "$root")" "$(session_branch "$f")" \
+        "$(session_size "$f")" "$(session_cwd "$f")" "$(preview "$f")"
+    done
+  )"
+  choice="$(printf '%s\n' "$menu" | fzf --delimiter=$'\t' --with-nth=2.. --nth=2.. \
+              --prompt='pull-session ▶ ' --height=80% --reverse --no-hscroll \
+              --header='↑/↓ move · Enter select · Esc cancel')" || { echo "cancelled."; exit 0; }
+  sid="$(printf '%s' "$choice" | cut -f1)"
+  [ -n "$sid" ] || { echo "no selection."; exit 0; }
+  cmd="/pull-session:pull-session $sid"
+  if   command -v pbcopy  >/dev/null 2>&1; then printf '%s' "$cmd" | pbcopy  && copied=" (copied to clipboard)"
+  elif command -v wl-copy >/dev/null 2>&1; then printf '%s' "$cmd" | wl-copy && copied=" (copied to clipboard)"
+  elif command -v xclip   >/dev/null 2>&1; then printf '%s' "$cmd" | xclip -selection clipboard 2>/dev/null && copied=" (copied to clipboard)"
+  fi
+  echo "Selected: $sid"
+  echo "Paste into your Claude session:  $cmd${copied}"
+}
+
+case "${1:-}" in
+  "")   list_sessions ;;
+  pick) pick_session ;;
+  *)    summarize "$1" "${2:-}" ;;
+esac
