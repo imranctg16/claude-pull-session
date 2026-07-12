@@ -20,8 +20,16 @@
 set -euo pipefail
 shopt -s nullglob
 
+for dep in claude jq; do
+  command -v "$dep" >/dev/null 2>&1 || { echo "pull-session needs '$dep' on your PATH."; exit 1; }
+done
+
 LIVE_WINDOW="${PULL_SESSION_LIVE_WINDOW:-120}"
 NOW="$(date +%s)"
+
+# portable across GNU (Linux) and BSD (macOS) coreutils
+mtime()   { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null || echo 0; }
+fmtdate() { LC_ALL=C date -d "@$1" '+%b%d %H:%M' 2>/dev/null || LC_ALL=C date -r "$1" '+%b%d %H:%M' 2>/dev/null || echo '?'; }
 
 # ---- discover config-dir roots (dirs that contain a projects/ subdir) ----
 ROOTS=()
@@ -50,9 +58,9 @@ while IFS= read -r line; do RECORDS+=("$line"); done < <(
   for root in "${ROOTS[@]}"; do
     for f in "$root"/projects/*/*.jsonl; do
       [ -f "$f" ] || continue
-      printf '%s\t%s\t%s\n' "$(stat -c %Y "$f" 2>/dev/null || echo 0)" "$root" "$f"
+      printf '%s\t%s\t%s\n' "$(mtime "$f")" "$root" "$f"
     done
-  done | sort -rn -t"$(printf '\t')" -k1
+  done | sort -rn
 )
 [ "${#RECORDS[@]}" -gt 0 ] || { echo "No sessions found under: ${ROOTS[*]}"; exit 1; }
 
@@ -89,7 +97,7 @@ list_sessions() {
     IFS=$'\t' read -r m root f <<< "$rec"
     local flag ts
     if is_live "$m"; then flag="● live"; else flag="  idle"; fi
-    ts="$(date -d "@$m" '+%b%d %H:%M' 2>/dev/null || echo '?')"
+    ts="$(fmtdate "$m")"
     printf '  [%d] %s  %s  %s · %s\n        ↳ %s…\n\n' \
       "$i" "$flag" "$ts" "$(instance_label "$root")" "$(project_label "$f")" "$(preview "$f")"
   done
