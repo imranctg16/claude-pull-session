@@ -101,9 +101,9 @@ list_sessions() {
     local flag ts
     if is_live "$m"; then flag="● live"; else flag="  idle"; fi
     ts="$(fmtdate "$m")"
-    printf '  [%d] %s  %s   %s · branch %s · %s\n       %s\n       ↳ %s…\n\n' \
+    printf '  [%d] %s  %s   %s · branch %s · %s · id %s\n       %s\n       ↳ %s…\n\n' \
       "$i" "$flag" "$ts" "$(instance_label "$root")" "$(session_branch "$f")" "$(session_size "$f")" \
-      "$(session_cwd "$f")" "$(preview "$f")"
+      "$(basename "$f" .jsonl | cut -c1-8)" "$(session_cwd "$f")" "$(preview "$f")"
   done
   echo "Pull one in:  /pull-session:pull-session <number>   (or a session id)"
   echo "● live = written in the last ${LIVE_WINDOW}s. Pulling a live one needs --force,"
