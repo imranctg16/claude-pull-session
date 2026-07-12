@@ -1,15 +1,14 @@
 ---
-description: Pull a summary of another Claude Code session into this one
-argument-hint: "[session-id]  (omit to list sessions)"
+description: Pull a summary of another Claude Code session (any instance / project) into this one
+argument-hint: "[number|session-id] [--force]  (omit to list)"
 allowed-tools: Bash(bash:*)
 ---
 
-Run the pull-session helper:
-
 !`bash "${CLAUDE_PLUGIN_ROOT}/scripts/pull-session.sh" $ARGUMENTS`
 
-Now act on its output:
+Act on the output above:
 
-- If it printed a **list of sessions**, show me that list and ask which session id I want to pull. (The newest is usually this current session — I probably want a different one.)
-- If it printed a block wrapped in **`=== CONTEXT PULLED FROM SESSION … ===`**, absorb that summary as background context for our current work, then give me a **one-line** confirmation of what you now know from the other session. Do not repeat the whole summary back to me.
-- If it printed an **error**, relay it plainly and suggest running `/pull-session` with no argument to list sessions.
+- **A numbered list of sessions** → show it to me and ask which **number** (or session id) to pull. Call out the **● live** ones, and note that pulling a live session needs `--force` — and for a clean merge it's better to run `/compact` in that session's own terminal first.
+- **A `⚠ … looks LIVE …` warning** → relay it and ask whether I want to `--force` it or compact it first. Do **not** re-run with `--force` without my go-ahead.
+- **A `=== CONTEXT PULLED FROM SESSION … ===` block** → absorb that summary as background context for our current work, then give me a **one-line** confirmation of what you now know from that session. Don't echo the whole summary back.
+- **An error** → relay it plainly and suggest running the command with no argument to list sessions.

@@ -1,54 +1,74 @@
 # pull-session
 
-A [Claude Code](https://claude.com/claude-code) **plugin** that pulls a **summary of another session** into your current one.
+A [Claude Code](https://claude.com/claude-code) **plugin** that finds your sessions **across every local instance and project** and pulls a chosen one's **summary** into your current session.
 
-You've got two Claude Code sessions open in two terminals. One figured something out — a plan, a decision, half a debug. You want the *other* one to know, without copy-pasting a wall of transcript. Install the plugin, then run:
+You run `claude`, `claude2`, `claude3` in different terminals (different config dirs), across different repos. One of them worked something out and you want *this* session to know — without copy-pasting a wall of transcript. Install the plugin, then:
 
 ```
 /pull-session:pull-session
 ```
 
-It lists the sessions for the current project. Pick one:
+lists every session it can find — newest first, tagged by **instance · project**, with a **● live** flag for ones active right now:
 
 ```
-/pull-session:pull-session 5d8281d1-d0bc-49ac-a670-c698b3ee6a90
+[1] ● live  Jul12 13:22  default · Youtube Channels
+      ↳ we have a conversation exported here, i need you to load it…
+[2] ● live  Jul12 13:22  work    · Job Portal
+      ↳ …
+[3]   idle  Jul10 17:32  claude3 · CampaignFlow
+      ↳ lets do a fun thing, separate from the project…
 ```
 
-…and that session is asked (headlessly) to summarize itself — goal, decisions, files touched, current state, open threads — and the summary drops into your current session as context.
+Pull one in by number (or id):
+
+```
+/pull-session:pull-session 3
+```
+
+…and that session is asked (headlessly, under **its own** config dir) to summarize itself — goal, decisions, files touched, current state, open threads — and the summary drops into your current session as context.
 
 ## Why this exists
 
-Claude Code sessions are **independent by design**. `--resume` / `--continue` *switch to* a prior session; `--fork-session` *copies* the current one. There's no built-in "session A, absorb session B." This fills that gap with an on-demand, one-way **pull**.
+Claude Code sessions are **independent by design** and each instance has its **own config dir**. `--resume`/`--continue` only *switch to* a prior session **in the current instance**; nothing merges or imports across sessions — let alone across instances or projects. This fills that gap with an on-demand, cross-instance **pull**.
 
 ## Install
 
-This repo is a Claude Code marketplace containing the plugin. Inside any Claude Code session:
+This repo is a Claude Code marketplace containing the plugin. In any Claude Code session:
 
 ```
 /plugin marketplace add imranctg16/claude-pull-session
 /plugin install pull-session@imran-plugins
 ```
 
-Then use `/pull-session:pull-session`. Requires the `claude` CLI, `bash`, and `jq` on your PATH.
+Then use `/pull-session:pull-session`. Requires `claude`, `bash`, `jq` on PATH.
 
 ## Usage
 
-- `/pull-session:pull-session` — list this project's sessions (newest first, with a preview).
-- `/pull-session:pull-session <session-id>` — pull that session's summary into the current one.
+- `/pull-session:pull-session` — list all sessions (all instances, all projects), numbered, with ● live flags.
+- `/pull-session:pull-session <number|id>` — pull that session's summary into the current one.
+- `/pull-session:pull-session <number|id> --force` — pull a **live** session anyway (see caveats).
 
-## How it works
+## How it discovers sessions
 
-- Sessions are transcripts at `${CLAUDE_CONFIG_DIR:-~/.claude}/projects/<cwd-with-non-alphanumerics-as-dashes>/<session-id>.jsonl`.
-- With no argument, the bundled script lists those transcripts with a preview.
-- With a session id, it runs `claude -p --resume <id> --output-format json "<summary prompt>"` — asking *that* session to summarize itself — and prints the result. The plugin command locates its bundled script via `${CLAUDE_PLUGIN_ROOT}` and tells Claude to absorb the output.
-- It summarizes via `claude -p` rather than parsing the raw `.jsonl`, because the transcript's internal shape is undocumented and changes between Claude Code releases — so this keeps working across versions.
+- Scans config dirs that contain a `projects/` dir: `$PULL_SESSION_DIRS` (colon-separated override) · `${CLAUDE_CONFIG_DIR:-~/.claude}` · `~/.claude`, `~/.claude-*`, and the same one level up (to catch HOME-swapped instances). There's no registry of instances in Claude Code, so scanning is the intended approach.
+- Session transcripts live at `<config-dir>/projects/<cwd-dashed>/<session-id>.jsonl`; the project name shown comes from the transcript's `cwd`.
+- **● live** = written within `$PULL_SESSION_LIVE_WINDOW` seconds (default 120). Claude Code has **no session lock/PID files**, so recent-write is the only signal — treat it as a hint, not proof.
+- Summaries use `claude -p --resume <id>` run under that session's own `CLAUDE_CONFIG_DIR`, not raw-`.jsonl` parsing (the format is undocumented and transcripts can be tens of MB).
 
-## Caveats (by design)
+## Caveats (by design / by platform limits)
 
-- **One-way, on-demand snapshot** — not a live two-way sync. Sessions can't truly merge mid-flight.
-- **Costs one small summarization call** per pull (a headless `claude -p` turn).
-- The pull runs a turn *inside* the target session, appending one "summarize yourself" exchange to its history. Harmless, but not zero-touch.
-- Same-project only (sessions are scoped to the working directory).
+- **One-way, on-demand snapshot** — not a live two-way sync.
+- **Costs one small summarization call** per pull.
+- Pulling **appends a summary turn** to the target session. Harmless when idle; for a **live** session it can interleave with the running instance, so live sessions need `--force`.
+- **No pre-merge compaction from outside.** Claude Code's `/compact` is interactive-only — there's no headless way to compact a session you're not in. To shrink a live session before merging, run `/compact` in *its* terminal first; this tool will remind you.
+- Cross-instance labels reflect the config dirs as seen from the running instance.
+
+## Config (env vars)
+
+| Var | Default | Purpose |
+|---|---|---|
+| `PULL_SESSION_DIRS` | — | Colon-separated extra config dirs to scan (for non-standard layouts). |
+| `PULL_SESSION_LIVE_WINDOW` | `120` | Seconds since last write to still count as ● live. |
 
 ## Repo layout
 
@@ -57,7 +77,7 @@ Then use `/pull-session:pull-session`. Requires the `claude` CLI, `bash`, and `j
 plugins/pull-session/
 ├── .claude-plugin/plugin.json         # plugin manifest
 ├── commands/pull-session.md           # the /pull-session:pull-session command
-└── scripts/pull-session.sh            # the helper (found at runtime via $CLAUDE_PLUGIN_ROOT)
+└── scripts/pull-session.sh            # discovery + summarize (found via $CLAUDE_PLUGIN_ROOT)
 ```
 
 ## License
