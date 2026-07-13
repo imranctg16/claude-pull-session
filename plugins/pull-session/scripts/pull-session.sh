@@ -174,7 +174,7 @@ preview() { # first REAL user message — skip command/caveat/system wrappers (l
                  | if type=="array" then (map(.text? // "")|join(" ")) else . end' 2>/dev/null \
         | sed 's/^[[:space:]]*//' \
         | grep -vE '^(<|Caveat|\[Request|$)' \
-        | head -1 | tr '\n' ' ' | sed 's/  */ /g')"
+        | head -1 | tr '\n' ' ' | sed 's/  */ /g; s/^ //; s/ *$//')"
   [ -z "$msg" ] && msg="$(grep -m1 -oE '"content":"[^"]{4,90}' "$f" 2>/dev/null | sed 's/"content":"//')"
   printf '%.78s' "${msg:-(no preview)}"
 }
@@ -201,26 +201,36 @@ session_flag() { # live/idle token: busy (generating) > open (in a terminal) > r
 }
 is_live() { [ "$(( NOW - $1 ))" -le "$LIVE_WINDOW" ]; }   # kept for the --force guard fallback
 
+# noise = sessions that aren't real work: pull-session's own output, command dumps, tool spills, etc.
+is_noise() {
+  case "$1" in
+    "Claude Code sessions"*|"Output too large"*|"<local-command-caveat"*|"<command-"*|\
+    "/plugin"*|"/pull-session"*|"Caveat:"*|"[Request interrupted"*|"clear"|"(no preview)"*) return 0 ;;
+  esac
+  return 1
+}
+
 list_sessions() {
-  echo "Claude Code sessions — all instances, all projects (live first):"
+  echo "Your Claude Code sessions — live first:"
   echo
-  local i=0 rec m root f shown=0
+  local i=0 rec m root f shown=0 hidden=0 pv
   for rec in "${RECORDS[@]}"; do
     i=$((i + 1))
-    if [ "$shown" -ge "$LIMIT" ]; then continue; fi
-    shown=$((shown + 1))
+    [ "$shown" -ge "$LIMIT" ] && break
     IFS=$'\t' read -r m root f <<< "$rec"
+    pv="$(preview "$f")"
+    if is_noise "$pv"; then hidden=$((hidden + 1)); continue; fi
+    shown=$((shown + 1))
     printf '  [%d] %-7s %s\n       %s · branch %s · %s\n       last used %s · %s msgs · %s · id %s\n       ↳ %s…\n\n' \
       "$i" "$(session_flag "$f")" "$(session_name "$f")" \
       "$(session_cwd "$f")" "$(session_branch "$f")" "$(instance_label "$root")" \
       "$(reltime "$m")" "$(session_msgs "$f")" "$(session_size "$f")" \
-      "$(basename "$f" .jsonl | cut -c1-8)" "$(preview "$f")"
+      "$(basename "$f" .jsonl | cut -c1-8)" "$pv"
   done
-  [ "${#RECORDS[@]}" -gt "$LIMIT" ] && echo "  … and $(( ${#RECORDS[@]} - LIMIT )) older sessions (raise with PULL_SESSION_LIMIT)."
+  echo "  (showing $shown${hidden:+, $hidden junk sessions hidden}; more with PULL_SESSION_LIMIT)"
   echo
-  echo "Pull one in:  /pull-session:pull-session <number>   (or a session id)"
-  echo "● busy = generating now · ○ open = running, idle · · recent = written <${LIVE_WINDOW}s ago."
-  echo "Pulling is append-only (safe): open/idle sessions pull directly; only one generating right now needs --force."
+  echo "● busy = generating now · ○ open = open in a terminal, idle."
+  echo "Pulling is append-only & safe; only a session generating right now needs --force."
 }
 
 resolve() { # arg -> sets REC to the matching "mtime\troot\tfile"; supports index or (partial) id
@@ -272,15 +282,16 @@ summarize() {
 
 pick_session() { # interactive arrow-key picker — TERMINAL ONLY (needs a TTY; can't run inside the slash command)
   command -v fzf >/dev/null 2>&1 || { echo "The 'pick' mode needs fzf — install it (brew install fzf / apt install fzf)."; exit 1; }
-  local rec m root f sid menu choice cmd copied=""
+  local rec m root f sid pv menu choice cmd copied=""
   menu="$(
     for rec in "${RECORDS[@]}"; do
       IFS=$'\t' read -r m root f <<< "$rec"
       sid="$(basename "$f" .jsonl)"
+      pv="$(preview "$f")"; is_noise "$pv" && continue
       printf '%s\t%s  %s  ·  %s · %s · %s msgs · %s  ↳ %s\n' \
         "$sid" "$(session_flag "$f")" "$(session_name "$f")" \
         "$(basename "$(session_cwd "$f")")" "$(reltime "$m")" "$(session_msgs "$f")" \
-        "$(session_size "$f")" "$(preview "$f")"
+        "$(session_size "$f")" "$pv"
     done
   )"
   choice="$(printf '%s\n' "$menu" | fzf --delimiter=$'\t' --with-nth=2.. --nth=2.. \
