@@ -1,8 +1,8 @@
 # pull-session
 
-A [Claude Code](https://claude.com/claude-code) plugin that lists your sessions across **every local instance and project** and pulls a chosen one's **summary** into your current session.
+A [Claude Code](https://claude.com/claude-code) plugin that pulls the context of **another active Claude Code chat** into your current one.
 
-You run `claude`, `claude2`, `claude3` in different terminals and repos. When one figures something out and you want *this* session to know it — pull it in, no copy-pasting transcripts.
+Working across more than one Claude Code chat? When one of them works something out and you want *this* chat to know it, pull its summary in — no copy-pasting transcripts.
 
 ## Install
 
