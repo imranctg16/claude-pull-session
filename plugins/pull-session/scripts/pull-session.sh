@@ -169,12 +169,16 @@ preview() { # first REAL user message — skip command/caveat/system wrappers (l
   [ -z "$msg" ] && msg="$(grep -m1 -oE '"content":"[^"]{4,90}' "$f" 2>/dev/null | sed 's/"content":"//')"
   printf '%.78s' "${msg:-(no preview)}"
 }
-session_name() { # the app's own name, else a short label derived from the first message
-  local meta nm
-  meta="$(sess_meta "$(basename "$1" .jsonl)")"
-  nm="$(printf '%s' "$meta" | cut -f1)"
-  if [ -n "$nm" ]; then printf '%s' "$nm"
-  else printf '%.42s (unnamed)' "$(preview "$1")"; fi
+session_name() { # the exact title shown in the CLI tab, with graceful fallbacks
+  local f="$1" title meta nm
+  # 1) the rich "ai-title" Claude generates — this IS the tab title (use the most recent one)
+  title="$(grep '"type":"ai-title"' "$f" 2>/dev/null | tail -1 | jq -r 'try .aiTitle // empty' 2>/dev/null)"
+  [ -n "$title" ] && { printf '%s' "$title"; return; }
+  # 2) the app's session-name slug from sessions/<pid>.json (e.g. blue-theme-logo-rebrand)
+  meta="$(sess_meta "$(basename "$f" .jsonl)")"; nm="$(printf '%s' "$meta" | cut -f1)"
+  [ -n "$nm" ] && { printf '%s' "$nm"; return; }
+  # 3) last resort: derive from the first real message
+  printf '%.42s (untitled)' "$(preview "$f")"
 }
 session_flag() { # live/idle token: busy (generating) > open (in a terminal) > recent > idle
   local sid meta status pid
