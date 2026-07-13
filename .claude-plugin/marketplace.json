@@ -7,7 +7,7 @@
       "name": "pull-session",
       "source": "./plugins/pull-session",
       "description": "Find Claude Code sessions across all local instances and projects, and pull a chosen one's summary into the current session.",
-      "version": "2.3.1"
+      "version": "2.4.0"
     }
   ]
 }

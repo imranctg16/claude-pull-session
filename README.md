@@ -8,16 +8,23 @@ You run `claude`, `claude2`, `claude3` in different terminals (different config 
 /pull-session:pull-session
 ```
 
-lists every session it can find — newest first, tagged by **instance · project**, with a **● live** flag for ones active right now:
+lists every session it can find — **by its real name** (the same label shown at the top of that CLI), **live sessions first**, tagged by **instance · project**, with a live flag:
 
 ```
-[1] ● live  Jul12 13:22  default · Youtube Channels
-      ↳ we have a conversation exported here, i need you to load it…
-[2] ● live  Jul12 13:22  work    · Job Portal
+[1] ● busy  blue-theme-logo-rebrand
+      Youtube Channels · branch main · claude2 · id 5d8281d1
+      ↳ yo, i want you to understand everything we have been doing…
+[2] ○ open  job-portal-7e
+      Job Portal · branch main · claude3 · id ea61ce67
       ↳ …
-[3]   idle  Jul10 17:32  claude3 · CampaignFlow
+[3]   idle  campaign-cleanup (unnamed)
+      CampaignFlow · branch main · default · id a1b2c3d4
       ↳ lets do a fun thing, separate from the project…
 ```
+
+`● busy` = generating right now · `○ open` = running but idle · `idle` = closed. Names and live
+status come from the app's own per-session metadata; older sessions the app no longer tracks fall
+back to a name derived from their first message.
 
 Pull one in by number (or id):
 
@@ -72,8 +79,8 @@ Arrow to a session, hit **Enter**, and it copies `/pull-session:pull-session <id
 ## How it discovers sessions
 
 - Scans config dirs that contain a `projects/` dir: `$PULL_SESSION_DIRS` (colon-separated override) · `${CLAUDE_CONFIG_DIR:-~/.claude}` · `~/.claude`, `~/.claude-*`, and the same one level up (to catch HOME-swapped instances). There's no registry of instances in Claude Code, so scanning is the intended approach.
-- Session transcripts live at `<config-dir>/projects/<cwd-dashed>/<session-id>.jsonl`; the project name shown comes from the transcript's `cwd`.
-- **● live** = written within `$PULL_SESSION_LIVE_WINDOW` seconds (default 120). Claude Code has **no session lock/PID files**, so recent-write is the only signal — treat it as a hint, not proof.
+- Session transcripts live at `<config-dir>/projects/<cwd-dashed>/<session-id>.jsonl`; the project shown comes from the transcript's `cwd`.
+- **Names & live status** come from the app's own per-session metadata at `<config-dir>/sessions/<pid>.json` (`sessionId`, `name`, `status`, `pid`). The name is the same one shown at the top of that CLI. Live state is real: `● busy` = the tracked process is alive and its `status` is `busy`; `○ open` = process alive but idle. Sessions the app no longer tracks have only a transcript — they show as `idle` with a name derived from their first message, and use a recent-write fallback (`$PULL_SESSION_LIVE_WINDOW`, default 120s) for liveness.
 - Summaries use `claude -p --resume <id>` run under that session's own `CLAUDE_CONFIG_DIR`, not raw-`.jsonl` parsing (the format is undocumented and transcripts can be tens of MB).
 
 ## Caveats (by design / by platform limits)
@@ -90,7 +97,8 @@ Arrow to a session, hit **Enter**, and it copies `/pull-session:pull-session <id
 | Var | Default | Purpose |
 |---|---|---|
 | `PULL_SESSION_DIRS` | — | Colon-separated extra config dirs to scan (for non-standard layouts). |
-| `PULL_SESSION_LIVE_WINDOW` | `120` | Seconds since last write to still count as ● live. |
+| `PULL_SESSION_LIVE_WINDOW` | `120` | Recent-write window (seconds) used as the liveness fallback for untracked sessions. |
+| `PULL_SESSION_LIMIT` | `25` | Max sessions listed (live-first); the rest are summarized as "… and N older". |
 
 ## Repo layout
 

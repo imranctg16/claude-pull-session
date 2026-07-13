@@ -1,22 +1,28 @@
 #!/usr/bin/env bash
-# pull-session v2 — discover Claude Code sessions across ALL local instances (config dirs)
-# and ALL projects, flag which are live, and pull a chosen session's summary into the current one.
+# pull-session v3 — discover Claude Code sessions across ALL local instances (config dirs)
+# and ALL projects, label them by their real session NAME, flag which are live, and pull a
+# chosen session's summary into the current one.
 #
-#   (no args)              -> list every session found (newest first), numbered, with a ● live flag
+#   (no args)              -> list sessions (live first), numbered, by name, with a live flag
 #   <number|session-id>    -> summarize that session and print it for the current session to absorb
 #   <number|id> --force    -> pull even a LIVE session (see the live-session caveat below)
 #
-# Discovery: scans candidate config dirs (each contains a projects/ dir) —
+# Names & live status come from the app's OWN per-session metadata at <config-dir>/sessions/<pid>.json
+# (fields: sessionId, name, nameSource, status, pid, cwd) — the same name shown at the top of the CLI.
+# A session is:  ● busy = tracked, process alive, status "busy" · ○ open = tracked, process alive, idle
+#   · recent = not tracked but written within $PULL_SESSION_LIVE_WINDOW · idle = otherwise.
+# Sessions the app no longer tracks have only a transcript and no name — those fall back to a name
+# derived from their first message.
+#
+# Discovery scans candidate config dirs (each contains projects/ and usually sessions/) —
 #   $PULL_SESSION_DIRS (colon-separated, explicit override) · ${CLAUDE_CONFIG_DIR:-$HOME/.claude}
 #   · ~/.claude, ~/.claude-*, and the same one level up (to catch HOME-swapped instances).
-# "Live" = transcript written within $PULL_SESSION_LIVE_WINDOW seconds (default 120). There are no
-# lock/PID files in Claude Code, so recent-write is the only signal — treat it as a hint, not proof.
 #
 # Summaries use `claude -p --resume <id>` run under that session's OWN config dir (cross-instance),
-# NOT raw-JSONL parsing (undocumented format + transcripts can be tens of MB). This APPENDS a
-# summary turn to the target session — harmless when idle, but for a LIVE session it can interleave
-# with the running instance, so live sessions require --force. Claude Code has no headless /compact,
-# so to shrink a live session before merging, run /compact in ITS terminal first (this tool can't).
+# NOT raw-JSONL parsing. This APPENDS a summary turn to the target session — harmless when idle, but
+# for a LIVE session it can interleave with the running instance, so live sessions require --force.
+# Claude Code has no headless /compact, so to shrink a live session before merging, run /compact in
+# ITS terminal first (this tool can't).
 set -euo pipefail
 shopt -s nullglob
 
@@ -25,11 +31,13 @@ for dep in claude jq; do
 done
 
 LIVE_WINDOW="${PULL_SESSION_LIVE_WINDOW:-120}"
+LIMIT="${PULL_SESSION_LIMIT:-25}"
 NOW="$(date +%s)"
 
 # portable across GNU (Linux) and BSD (macOS) coreutils
-mtime()   { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null || echo 0; }
-fmtdate() { LC_ALL=C date -d "@$1" '+%b%d %H:%M' 2>/dev/null || LC_ALL=C date -r "$1" '+%b%d %H:%M' 2>/dev/null || echo '?'; }
+mtime()    { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null || echo 0; }
+fmtdate()  { LC_ALL=C date -d "@$1" '+%b%d %H:%M' 2>/dev/null || LC_ALL=C date -r "$1" '+%b%d %H:%M' 2>/dev/null || echo '?'; }
+pid_alive() { [ -n "${1:-}" ] && [ "$1" != "null" ] && kill -0 "$1" 2>/dev/null; }
 
 # ---- discover config-dir roots (dirs that contain a projects/ subdir) ----
 ROOTS=()
@@ -52,15 +60,38 @@ for cand in "$HOME"/.claude "$HOME"/.claude-*/.claude "$HOME"/.claude-* \
 done
 [ "${#ROOTS[@]}" -gt 0 ] || { echo "No Claude config dirs found (looked for */projects/)."; echo "Set PULL_SESSION_DIRS=/path/to/.claude:/another/.claude"; exit 1; }
 
-# ---- collect all sessions, newest first: each line = mtime<TAB>root<TAB>file ----
+# ---- index the app's own session metadata (name + live status), keyed by sessionId ----
+# One line per tracked session:  sessionId<TAB>name<TAB>status<TAB>pid
+SESS_INDEX=""
+for root in "${ROOTS[@]}"; do
+  for sf in "$root"/sessions/*.json; do
+    [ -f "$sf" ] || continue
+    line="$(jq -r '[.sessionId, (.name // ""), (.status // ""), (.pid // "")] | @tsv' "$sf" 2>/dev/null)" || continue
+    [ -n "$line" ] && SESS_INDEX="$SESS_INDEX$line
+"
+  done
+done
+sess_meta() { # $1=sessionId -> "name\tstatus\tpid" (empty if the app isn't tracking it)
+  [ -n "$SESS_INDEX" ] || return 0
+  printf '%s' "$SESS_INDEX" | awk -F'\t' -v id="$1" '$1==id {print $2"\t"$3"\t"$4; exit}'
+}
+
+# ---- collect sessions, live first (busy > open > tracked-dead > recent > idle), then newest ----
+# Each RECORD line = mtime<TAB>root<TAB>file  (priority is used only for ordering, then stripped)
 RECORDS=()
 while IFS= read -r line; do RECORDS+=("$line"); done < <(
   for root in "${ROOTS[@]}"; do
     for f in "$root"/projects/*/*.jsonl; do
       [ -f "$f" ] || continue
-      printf '%s\t%s\t%s\n' "$(mtime "$f")" "$root" "$f"
+      sid="$(basename "$f" .jsonl)"
+      meta="$(sess_meta "$sid")"; status=""; pid=""
+      [ -n "$meta" ] && IFS=$'\t' read -r _nm status pid <<< "$meta"
+      prio=4
+      if pid_alive "$pid"; then [ "$status" = "busy" ] && prio=0 || prio=1
+      elif [ -n "$meta" ]; then prio=2; fi
+      printf '%s\t%s\t%s\t%s\n' "$prio" "$(mtime "$f")" "$root" "$f"
     done
-  done | sort -rn
+  done | sort -t$'\t' -k1,1n -k2,2nr | cut -f2-
 )
 [ "${#RECORDS[@]}" -gt 0 ] || { echo "No sessions found under: ${ROOTS[*]}"; exit 1; }
 
@@ -70,12 +101,6 @@ instance_label() { # short tag for a config dir root
     "$HOME/.claude") echo "default" ;;
     *) basename "$(dirname "$r")" | sed 's/^\.//' ;;   # e.g. .claude-user2 -> claude-user2
   esac
-}
-project_label() { # accurate cwd from the transcript, fallback to the dashed hash
-  local f="$1" cwd
-  cwd="$(grep -m1 -oE '"cwd":"[^"]+"' "$f" 2>/dev/null | head -1 | sed 's/"cwd":"//;s/"$//')"
-  [ -n "$cwd" ] && { basename "$cwd"; return; }
-  basename "$(dirname "$f")"
 }
 session_cwd()    { local f="$1" c; c="$(grep -m1 -oE '"cwd":"[^"]+"' "$f" 2>/dev/null | head -1 | sed 's/.*"cwd":"//;s/".*//')"; [ -n "$c" ] && printf '%s' "$c" || printf '(%s)' "$(basename "$(dirname "$f")")"; }
 session_branch() { local b; b="$(grep -m1 -oE '"gitBranch":"[^"]*"' "$1" 2>/dev/null | head -1 | sed 's/.*"gitBranch":"//;s/".*//')"; printf '%s' "${b:-—}"; }
@@ -89,25 +114,45 @@ preview() {
   [ -z "$msg" ] && msg="$(grep -m1 -oE '"content":"[^"]{4,90}' "$f" 2>/dev/null | sed 's/"content":"//')"
   printf '%.78s' "${msg:-(no preview)}"
 }
-is_live() { [ "$(( NOW - $1 ))" -le "$LIVE_WINDOW" ]; }
+session_name() { # the app's own name, else a short label derived from the first message
+  local meta nm
+  meta="$(sess_meta "$(basename "$1" .jsonl)")"
+  nm="$(printf '%s' "$meta" | cut -f1)"
+  if [ -n "$nm" ]; then printf '%s' "$nm"
+  else printf '%.42s (unnamed)' "$(preview "$1")"; fi
+}
+session_flag() { # live/idle token from tracked status + a live pid, mtime as fallback
+  local meta status pid
+  meta="$(sess_meta "$(basename "$1" .jsonl)")"; status=""; pid=""
+  [ -n "$meta" ] && IFS=$'\t' read -r _n status pid <<< "$meta"
+  if pid_alive "$pid"; then
+    [ "$status" = "busy" ] && { printf '● busy'; return; }
+    printf '○ open'; return
+  fi
+  [ "$(( NOW - $(mtime "$1") ))" -le "$LIVE_WINDOW" ] && { printf '· recent'; return; }
+  printf '  idle'
+}
+is_live() { [ "$(( NOW - $1 ))" -le "$LIVE_WINDOW" ]; }   # kept for the --force guard fallback
 
 list_sessions() {
-  echo "Claude Code sessions — all instances, all projects (newest first):"
+  echo "Claude Code sessions — all instances, all projects (live first):"
   echo
-  local i=0 rec m root f
+  local i=0 rec m root f shown=0
   for rec in "${RECORDS[@]}"; do
     i=$((i + 1))
+    if [ "$shown" -ge "$LIMIT" ]; then continue; fi
+    shown=$((shown + 1))
     IFS=$'\t' read -r m root f <<< "$rec"
-    local flag ts
-    if is_live "$m"; then flag="● live"; else flag="  idle"; fi
-    ts="$(fmtdate "$m")"
-    printf '  [%d] %s  %s   %s · branch %s · %s · id %s\n       %s\n       ↳ %s…\n\n' \
-      "$i" "$flag" "$ts" "$(instance_label "$root")" "$(session_branch "$f")" "$(session_size "$f")" \
-      "$(basename "$f" .jsonl | cut -c1-8)" "$(session_cwd "$f")" "$(preview "$f")"
+    printf '  [%d] %-7s %s\n       %s · branch %s · %s · %s · id %s\n       ↳ %s…\n\n' \
+      "$i" "$(session_flag "$f")" "$(session_name "$f")" \
+      "$(session_cwd "$f")" "$(session_branch "$f")" "$(instance_label "$root")" \
+      "$(session_size "$f")" "$(basename "$f" .jsonl | cut -c1-8)" "$(preview "$f")"
   done
+  [ "${#RECORDS[@]}" -gt "$LIMIT" ] && echo "  … and $(( ${#RECORDS[@]} - LIMIT )) older sessions (raise with PULL_SESSION_LIMIT)."
+  echo
   echo "Pull one in:  /pull-session:pull-session <number>   (or a session id)"
-  echo "● live = written in the last ${LIVE_WINDOW}s. Pulling a live one needs --force,"
-  echo "and won't compact it — for that, run /compact in that session's own terminal first."
+  echo "● busy = generating now · ○ open = running, idle · · recent = written <${LIVE_WINDOW}s ago."
+  echo "Pulling a live one needs --force and won't compact it — run /compact in its own terminal first."
 }
 
 resolve() { # arg -> sets REC to the matching "mtime\troot\tfile"; supports index or (partial) id
@@ -124,41 +169,47 @@ resolve() { # arg -> sets REC to the matching "mtime\troot\tfile"; supports inde
 }
 
 summarize() {
-  local force="${2:-}" m root f sid
+  local force="${2:-}" m root f sid name
   resolve "$1"
   IFS=$'\t' read -r m root f <<< "$REC"
   sid="$(basename "$f" .jsonl)"
-  if is_live "$m" && [ "$force" != "--force" ]; then
-    echo "⚠ Session $sid ($(instance_label "$root") · $(project_label "$f")) looks LIVE (written $(( NOW - m ))s ago)."
-    echo "Summarizing it appends a turn to it and may interleave with the running instance."
-    echo "For a clean merge, switch to that session and run /compact first (this tool can't compact it)."
-    echo "To pull it anyway:  /pull-session:pull-session $1 --force"
-    exit 0
+  name="$(session_name "$f")"
+  local meta status pid; meta="$(sess_meta "$sid")"; status=""; pid=""
+  [ -n "$meta" ] && IFS=$'\t' read -r _n status pid <<< "$meta"
+  # LIVE = tracked process alive & busy, OR (untracked) written very recently
+  if { pid_alive "$pid" && [ "$status" = "busy" ]; } || { [ -z "$meta" ] && is_live "$m"; }; then
+    if [ "$force" != "--force" ]; then
+      echo "⚠ Session \"$name\" ($(instance_label "$root") · $sid) looks LIVE."
+      echo "Summarizing it appends a turn to it and may interleave with the running instance."
+      echo "For a clean merge, switch to that session and run /compact first (this tool can't compact it)."
+      echo "To pull it anyway:  /pull-session:pull-session $1 --force"
+      exit 0
+    fi
   fi
   local prompt='You are handing your context off to a DIFFERENT Claude Code session that cannot see your history. In 200-400 words, summarize: (1) the goal/task, (2) key decisions and the reasoning, (3) files created or changed, (4) current state, (5) open threads / next steps. Be factual and concise. Output ONLY the summary.'
   local out
   if ! out="$(CLAUDE_CONFIG_DIR="$root" claude -p --resume "$sid" --output-format json "$prompt" 2>/dev/null)"; then
-    echo "Could not query session $sid under $root (claude -p --resume failed)."; exit 1
+    echo "Could not query session \"$name\" ($sid) under $root (claude -p --resume failed)."; exit 1
   fi
   local summary
   summary="$(printf '%s' "$out" | jq -r 'try .result // empty' 2>/dev/null)"
   [ -z "$summary" ] && summary="$(printf '%s' "$out" | jq -r 'try (.[-1].result) // empty' 2>/dev/null)"
-  [ -n "$summary" ] || { echo "Queried $sid but got no summary text back."; exit 1; }
-  echo "=== CONTEXT PULLED FROM SESSION $sid ($(instance_label "$root") · $(project_label "$f")) ==="
+  [ -n "$summary" ] || { echo "Queried \"$name\" ($sid) but got no summary text back."; exit 1; }
+  echo "=== CONTEXT PULLED FROM \"$name\" ($(instance_label "$root") · id $sid) ==="
   echo "$summary"
   echo "=== END PULLED CONTEXT ==="
 }
 
 pick_session() { # interactive arrow-key picker — TERMINAL ONLY (needs a TTY; can't run inside the slash command)
   command -v fzf >/dev/null 2>&1 || { echo "The 'pick' mode needs fzf — install it (brew install fzf / apt install fzf)."; exit 1; }
-  local rec m root f sid flag menu choice cmd copied=""
+  local rec m root f sid menu choice cmd copied=""
   menu="$(
     for rec in "${RECORDS[@]}"; do
       IFS=$'\t' read -r m root f <<< "$rec"
-      sid="$(basename "$f" .jsonl)"; flag="idle"; is_live "$m" && flag="● live"
-      printf '%s\t%s  %s  %s · %s · %s  |  %s  ↳ %s\n' \
-        "$sid" "$flag" "$(fmtdate "$m")" "$(instance_label "$root")" "$(session_branch "$f")" \
-        "$(session_size "$f")" "$(session_cwd "$f")" "$(preview "$f")"
+      sid="$(basename "$f" .jsonl)"
+      printf '%s\t%s  %s  %s · %s  |  %s  ↳ %s\n' \
+        "$sid" "$(session_flag "$f")" "$(session_name "$f")" "$(instance_label "$root")" \
+        "$(session_cwd "$f")" "$(session_size "$f")" "$(preview "$f")"
     done
   )"
   choice="$(printf '%s\n' "$menu" | fzf --delimiter=$'\t' --with-nth=2.. --nth=2.. \
