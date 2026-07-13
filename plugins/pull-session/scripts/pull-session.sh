@@ -76,6 +76,56 @@ sess_meta() { # $1=sessionId -> "name\tstatus\tpid" (empty if the app isn't trac
   printf '%s' "$SESS_INDEX" | awk -F'\t' -v id="$1" '$1==id {print $2"\t"$3"\t"$4; exit}'
 }
 
+# ---- ground-truth liveness: a session is "open" if a live INTERACTIVE process is running for it ----
+# The tracking files above are stale/incomplete, so the real signal is a running `claude` process
+# (controlling TTY, NOT a child/subagent — CLAUDE_CODE_CHILD_SESSION=1). We map a process to a session
+# two ways: (1) its CLAUDE_CODE_SESSION_ID when that matches a transcript, and — because that id often
+# differs from the saved-transcript id — (2) by WORKING DIRECTORY: the newest transcript in the dir the
+# process runs in is treated as its open session. Linux via /proc; macOS/BSD via `ps -E`.
+LIVE_PROC_IDS=""
+LIVE_CWDS=""
+_add_live() { [ -n "${1:-}" ] && LIVE_PROC_IDS="$LIVE_PROC_IDS$1
+"; }
+_add_cwd()  { [ -n "${1:-}" ] && LIVE_CWDS="$LIVE_CWDS$1
+"; }
+if [ -d /proc ]; then
+  for _pid in $(ps -eo pid= 2>/dev/null); do
+    [ -r "/proc/$_pid/environ" ] || continue
+    _env="$(tr '\0' '\n' < "/proc/$_pid/environ" 2>/dev/null)" || continue
+    case "$_env" in *"CLAUDECODE=1"*) ;; *) continue ;; esac
+    case "$_env" in *"CLAUDE_CODE_CHILD_SESSION=1"*) continue ;; esac
+    _tty="$(ps -o tty= -p "$_pid" 2>/dev/null | tr -d ' ')"
+    case "$_tty" in ''|'?'|'??'|'-') continue ;; esac        # must own a terminal
+    _add_live "$(printf '%s\n' "$_env" | sed -n 's/^CLAUDE_CODE_SESSION_ID=//p' | head -1)"
+    _add_cwd  "$(readlink "/proc/$_pid/cwd" 2>/dev/null)"
+  done
+else
+  # macOS/BSD: `ps -E` appends the environment to the command column (no cwd without lsof, so id-only)
+  while IFS= read -r _line; do
+    case "$_line" in *"CLAUDECODE=1"*) ;; *) continue ;; esac
+    case "$_line" in *"CLAUDE_CODE_CHILD_SESSION=1"*) continue ;; esac
+    _add_live "$(printf '%s' "$_line" | sed -n 's/.*CLAUDE_CODE_SESSION_ID=\([0-9a-fA-F-]\{8,\}\).*/\1/p')"
+  done < <(ps -E -o tty=,command= 2>/dev/null | grep -vE '^[[:space:]]*\?')
+fi
+# resolve each live working dir to the newest real transcript in it (the session that's open there)
+if [ -n "$LIVE_CWDS" ]; then
+  while IFS= read -r _lc; do
+    [ -n "$_lc" ] || continue
+    _dash="$(printf '%s' "$_lc" | sed 's#[^a-zA-Z0-9]#-#g')"
+    _newest="$(
+      for root in "${ROOTS[@]}"; do
+        for f in "$root"/projects/"$_dash"/*.jsonl; do
+          [ -f "$f" ] || continue
+          case "$(basename "$f")" in agent-*) continue ;; esac
+          printf '%s\t%s\n' "$(mtime "$f")" "$(basename "$f" .jsonl)"
+        done
+      done | sort -rn | head -1 | cut -f2
+    )"
+    _add_live "$_newest"
+  done <<< "$(printf '%s' "$LIVE_CWDS" | sort -u)"
+fi
+proc_live() { case "$1" in "") return 1 ;; esac; case "$LIVE_PROC_IDS" in *"$1"*) return 0 ;; *) return 1 ;; esac; }
+
 # ---- collect sessions, live first (busy > open > tracked-dead > recent > idle), then newest ----
 # Each RECORD line = mtime<TAB>root<TAB>file  (priority is used only for ordering, then stripped)
 RECORDS=()
@@ -83,11 +133,13 @@ while IFS= read -r line; do RECORDS+=("$line"); done < <(
   for root in "${ROOTS[@]}"; do
     for f in "$root"/projects/*/*.jsonl; do
       [ -f "$f" ] || continue
+      case "$(basename "$f")" in agent-*) continue ;; esac   # skip subagent transcripts
       sid="$(basename "$f" .jsonl)"
       meta="$(sess_meta "$sid")"; status=""; pid=""
       [ -n "$meta" ] && IFS=$'\t' read -r _nm status pid <<< "$meta"
       prio=4
-      if pid_alive "$pid"; then [ "$status" = "busy" ] && prio=0 || prio=1
+      if pid_alive "$pid" && [ "$status" = "busy" ]; then prio=0
+      elif proc_live "$sid" || pid_alive "$pid"; then prio=1
       elif [ -n "$meta" ]; then prio=2; fi
       printf '%s\t%s\t%s\t%s\n' "$prio" "$(mtime "$f")" "$root" "$f"
     done
@@ -105,12 +157,14 @@ instance_label() { # short tag for a config dir root
 session_cwd()    { local f="$1" c; c="$(grep -m1 -oE '"cwd":"[^"]+"' "$f" 2>/dev/null | head -1 | sed 's/.*"cwd":"//;s/".*//')"; [ -n "$c" ] && printf '%s' "$c" || printf '(%s)' "$(basename "$(dirname "$f")")"; }
 session_branch() { local b; b="$(grep -m1 -oE '"gitBranch":"[^"]*"' "$1" 2>/dev/null | head -1 | sed 's/.*"gitBranch":"//;s/".*//')"; printf '%s' "${b:-—}"; }
 session_size()   { du -h "$1" 2>/dev/null | cut -f1 || echo '?'; }
-preview() {
+preview() { # first REAL user message — skip command/caveat/system wrappers (lines starting with '<' etc.)
   local f="$1" msg=""
-  msg="$(grep -m1 '"type":"user"' "$f" 2>/dev/null \
-        | jq -r 'try (.message.content) // empty' 2>/dev/null \
-        | jq -r 'if type=="array" then (map(.text? // "")|join(" ")) else . end' 2>/dev/null \
-        | tr '\n' ' ' | sed 's/  */ /g')"
+  msg="$(grep -m12 '"type":"user"' "$f" 2>/dev/null \
+        | jq -r 'try (.message.content) // empty
+                 | if type=="array" then (map(.text? // "")|join(" ")) else . end' 2>/dev/null \
+        | sed 's/^[[:space:]]*//' \
+        | grep -vE '^(<|Caveat|\[Request|$)' \
+        | head -1 | tr '\n' ' ' | sed 's/  */ /g')"
   [ -z "$msg" ] && msg="$(grep -m1 -oE '"content":"[^"]{4,90}' "$f" 2>/dev/null | sed 's/"content":"//')"
   printf '%.78s' "${msg:-(no preview)}"
 }
@@ -121,14 +175,13 @@ session_name() { # the app's own name, else a short label derived from the first
   if [ -n "$nm" ]; then printf '%s' "$nm"
   else printf '%.42s (unnamed)' "$(preview "$1")"; fi
 }
-session_flag() { # live/idle token from tracked status + a live pid, mtime as fallback
-  local meta status pid
-  meta="$(sess_meta "$(basename "$1" .jsonl)")"; status=""; pid=""
+session_flag() { # live/idle token: busy (generating) > open (in a terminal) > recent > idle
+  local sid meta status pid
+  sid="$(basename "$1" .jsonl)"
+  meta="$(sess_meta "$sid")"; status=""; pid=""
   [ -n "$meta" ] && IFS=$'\t' read -r _n status pid <<< "$meta"
-  if pid_alive "$pid"; then
-    [ "$status" = "busy" ] && { printf '● busy'; return; }
-    printf '○ open'; return
-  fi
+  if pid_alive "$pid" && [ "$status" = "busy" ]; then printf '● busy'; return; fi
+  if proc_live "$sid" || pid_alive "$pid"; then printf '○ open'; return; fi
   [ "$(( NOW - $(mtime "$1") ))" -le "$LIVE_WINDOW" ] && { printf '· recent'; return; }
   printf '  idle'
 }
@@ -176,11 +229,12 @@ summarize() {
   name="$(session_name "$f")"
   local meta status pid; meta="$(sess_meta "$sid")"; status=""; pid=""
   [ -n "$meta" ] && IFS=$'\t' read -r _n status pid <<< "$meta"
-  # LIVE = tracked process alive & busy, OR (untracked) written very recently
-  if { pid_alive "$pid" && [ "$status" = "busy" ]; } || { [ -z "$meta" ] && is_live "$m"; }; then
+  # LIVE = a live interactive process, OR a tracked busy process, OR (untracked) written very recently.
+  # Resuming a session that's open in a terminal spins a second instance on it, so guard behind --force.
+  if proc_live "$sid" || pid_alive "$pid" || { [ -z "$meta" ] && is_live "$m"; }; then
     if [ "$force" != "--force" ]; then
-      echo "⚠ Session \"$name\" ($(instance_label "$root") · $sid) looks LIVE."
-      echo "Summarizing it appends a turn to it and may interleave with the running instance."
+      echo "⚠ Session \"$name\" ($(instance_label "$root") · $sid) is OPEN in a terminal right now."
+      echo "Summarizing it resumes it headlessly and appends a turn — it can interleave with the live instance."
       echo "For a clean merge, switch to that session and run /compact first (this tool can't compact it)."
       echo "To pull it anyway:  /pull-session:pull-session $1 --force"
       exit 0
