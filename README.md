@@ -47,7 +47,7 @@ This repo is a Claude Code marketplace containing the plugin. In any Claude Code
 /plugin install pull-session@imran-plugins
 ```
 
-Then use `/pull-session:pull-session`.
+Then use `/pull-session:pull-session`. Prefer a shorter `/pull-session` (no prefix)? Plugin commands are always namespaced, but you can install the non-plugin copy in [`standalone/pull-session.md`](standalone/pull-session.md) into `<config-dir>/commands/` — see the notes at the top of that file.
 
 ### Requirements & scope
 
