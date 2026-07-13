@@ -137,10 +137,11 @@ while IFS= read -r line; do RECORDS+=("$line"); done < <(
       sid="$(basename "$f" .jsonl)"
       meta="$(sess_meta "$sid")"; status=""; pid=""
       [ -n "$meta" ] && IFS=$'\t' read -r _nm status pid <<< "$meta"
+      # "open" = this is the current session in a directory that has a live terminal (cwd-based,
+      # via proc_live). We deliberately do NOT trust tracking-file PIDs — they go stale and lie.
       prio=4
-      if pid_alive "$pid" && [ "$status" = "busy" ]; then prio=0
-      elif proc_live "$sid" || pid_alive "$pid"; then prio=1
-      elif [ -n "$meta" ]; then prio=2; fi
+      if proc_live "$sid" && [ "$status" = "busy" ]; then prio=0
+      elif proc_live "$sid"; then prio=1; fi
       printf '%s\t%s\t%s\t%s\n' "$prio" "$(mtime "$f")" "$root" "$f"
     done
   done | sort -t$'\t' -k1,1n -k2,2nr | cut -f2-
@@ -180,8 +181,8 @@ session_flag() { # live/idle token: busy (generating) > open (in a terminal) > r
   sid="$(basename "$1" .jsonl)"
   meta="$(sess_meta "$sid")"; status=""; pid=""
   [ -n "$meta" ] && IFS=$'\t' read -r _n status pid <<< "$meta"
-  if pid_alive "$pid" && [ "$status" = "busy" ]; then printf '● busy'; return; fi
-  if proc_live "$sid" || pid_alive "$pid"; then printf '○ open'; return; fi
+  if proc_live "$sid" && [ "$status" = "busy" ]; then printf '● busy'; return; fi
+  if proc_live "$sid"; then printf '○ open'; return; fi
   [ "$(( NOW - $(mtime "$1") ))" -le "$LIVE_WINDOW" ] && { printf '· recent'; return; }
   printf '  idle'
 }
@@ -229,9 +230,9 @@ summarize() {
   name="$(session_name "$f")"
   local meta status pid; meta="$(sess_meta "$sid")"; status=""; pid=""
   [ -n "$meta" ] && IFS=$'\t' read -r _n status pid <<< "$meta"
-  # LIVE = a live interactive process, OR a tracked busy process, OR (untracked) written very recently.
+  # LIVE = the current session in a folder with a live terminal, OR written very recently.
   # Resuming a session that's open in a terminal spins a second instance on it, so guard behind --force.
-  if proc_live "$sid" || pid_alive "$pid" || { [ -z "$meta" ] && is_live "$m"; }; then
+  if proc_live "$sid" || is_live "$m"; then
     if [ "$force" != "--force" ]; then
       echo "⚠ Session \"$name\" ($(instance_label "$root") · $sid) is OPEN in a terminal right now."
       echo "Summarizing it resumes it headlessly and appends a turn — it can interleave with the live instance."
