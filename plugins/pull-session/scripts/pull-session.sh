@@ -31,6 +31,7 @@ for dep in claude jq; do
 done
 
 LIVE_WINDOW="${PULL_SESSION_LIVE_WINDOW:-120}"
+BUSY_WINDOW="${PULL_SESSION_BUSY_WINDOW:-20}"   # written within this many secs = actively generating
 LIMIT="${PULL_SESSION_LIMIT:-25}"
 NOW="$(date +%s)"
 
@@ -219,7 +220,7 @@ list_sessions() {
   echo
   echo "Pull one in:  /pull-session:pull-session <number>   (or a session id)"
   echo "● busy = generating now · ○ open = running, idle · · recent = written <${LIVE_WINDOW}s ago."
-  echo "Pulling a live one needs --force and won't compact it — run /compact in its own terminal first."
+  echo "Pulling is append-only (safe): open/idle sessions pull directly; only one generating right now needs --force."
 }
 
 resolve() { # arg -> sets REC to the matching "mtime\troot\tfile"; supports index or (partial) id
@@ -243,20 +244,21 @@ summarize() {
   name="$(session_name "$f")"
   local meta status pid; meta="$(sess_meta "$sid")"; status=""; pid=""
   [ -n "$meta" ] && IFS=$'\t' read -r _n status pid <<< "$meta"
-  # LIVE = the current session in a folder with a live terminal, OR written very recently.
-  # Resuming a session that's open in a terminal spins a second instance on it, so guard behind --force.
-  if proc_live "$sid" || is_live "$m"; then
-    if [ "$force" != "--force" ]; then
-      echo "⚠ Session \"$name\" ($(instance_label "$root") · $sid) is OPEN in a terminal right now."
-      echo "Summarizing it resumes it headlessly and appends a turn — it can interleave with the live instance."
-      echo "For a clean merge, switch to that session and run /compact first (this tool can't compact it)."
-      echo "To pull it anyway:  /pull-session:pull-session $1 --force"
-      exit 0
-    fi
+  # The pull is append-only (resume + one summary turn) — it never deletes or truncates, so an
+  # open-but-idle session is safe to pull directly. The ONLY real hazard is a session that's
+  # ACTIVELY GENERATING right now (two writers at once), which we detect as a very recent write.
+  # So: pull by default; guard only the actively-busy case behind --force.
+  if [ "$(( NOW - m ))" -le "$BUSY_WINDOW" ] && [ "$force" != "--force" ]; then
+    echo "⚠ Session \"$name\" ($(instance_label "$root") · $sid) looks BUSY — it's writing right now."
+    echo "Pulling mid-generation can interleave two writers. Wait a moment, or force it:"
+    echo "  /pull-session:pull-session $1 --force"
+    exit 0
   fi
   local prompt='You are handing your context off to a DIFFERENT Claude Code session that cannot see your history. In 200-400 words, summarize: (1) the goal/task, (2) key decisions and the reasoning, (3) files created or changed, (4) current state, (5) open threads / next steps. Be factual and concise. Output ONLY the summary.'
-  local out
-  if ! out="$(CLAUDE_CONFIG_DIR="$root" claude -p --resume "$sid" --output-format json "$prompt" 2>/dev/null)"; then
+  # `claude --resume` resolves a session relative to the CURRENT working directory's project, so we
+  # must run it from the session's own cwd — otherwise it reports "No conversation found".
+  local scwd out; scwd="$(session_cwd "$f")"
+  if ! out="$( { [ -d "$scwd" ] && cd "$scwd"; } 2>/dev/null; CLAUDE_CONFIG_DIR="$root" claude -p --resume "$sid" --output-format json "$prompt" 2>/dev/null)"; then
     echo "Could not query session \"$name\" ($sid) under $root (claude -p --resume failed)."; exit 1
   fi
   local summary
