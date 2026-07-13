@@ -37,6 +37,13 @@ NOW="$(date +%s)"
 # portable across GNU (Linux) and BSD (macOS) coreutils
 mtime()    { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null || echo 0; }
 fmtdate()  { LC_ALL=C date -d "@$1" '+%b%d %H:%M' 2>/dev/null || LC_ALL=C date -r "$1" '+%b%d %H:%M' 2>/dev/null || echo '?'; }
+reltime()  { local d=$(( NOW - ${1:-0} ));
+  if   [ "$d" -lt 0 ];      then echo "just now"
+  elif [ "$d" -lt 60 ];     then echo "just now"
+  elif [ "$d" -lt 3600 ];   then echo "$((d/60))m ago"
+  elif [ "$d" -lt 86400 ];  then echo "$((d/3600))h ago"
+  elif [ "$d" -lt 604800 ]; then echo "$((d/86400))d ago"
+  else fmtdate "$1"; fi; }
 pid_alive() { [ -n "${1:-}" ] && [ "$1" != "null" ] && kill -0 "$1" 2>/dev/null; }
 
 # ---- discover config-dir roots (dirs that contain a projects/ subdir) ----
@@ -158,6 +165,7 @@ instance_label() { # short tag for a config dir root
 session_cwd()    { local f="$1" c; c="$(grep -m1 -oE '"cwd":"[^"]+"' "$f" 2>/dev/null | head -1 | sed 's/.*"cwd":"//;s/".*//')"; [ -n "$c" ] && printf '%s' "$c" || printf '(%s)' "$(basename "$(dirname "$f")")"; }
 session_branch() { local b; b="$(grep -m1 -oE '"gitBranch":"[^"]*"' "$1" 2>/dev/null | head -1 | sed 's/.*"gitBranch":"//;s/".*//')"; printf '%s' "${b:-—}"; }
 session_size()   { du -h "$1" 2>/dev/null | cut -f1 || echo '?'; }
+session_msgs()   { grep -cE '"type":"(user|assistant)"' "$1" 2>/dev/null || echo 0; }  # rough turn count
 preview() { # first REAL user message — skip command/caveat/system wrappers (lines starting with '<' etc.)
   local f="$1" msg=""
   msg="$(grep -m12 '"type":"user"' "$f" 2>/dev/null \
@@ -201,10 +209,11 @@ list_sessions() {
     if [ "$shown" -ge "$LIMIT" ]; then continue; fi
     shown=$((shown + 1))
     IFS=$'\t' read -r m root f <<< "$rec"
-    printf '  [%d] %-7s %s\n       %s · branch %s · %s · %s · id %s\n       ↳ %s…\n\n' \
+    printf '  [%d] %-7s %s\n       %s · branch %s · %s\n       last used %s · %s msgs · %s · id %s\n       ↳ %s…\n\n' \
       "$i" "$(session_flag "$f")" "$(session_name "$f")" \
       "$(session_cwd "$f")" "$(session_branch "$f")" "$(instance_label "$root")" \
-      "$(session_size "$f")" "$(basename "$f" .jsonl | cut -c1-8)" "$(preview "$f")"
+      "$(reltime "$m")" "$(session_msgs "$f")" "$(session_size "$f")" \
+      "$(basename "$f" .jsonl | cut -c1-8)" "$(preview "$f")"
   done
   [ "${#RECORDS[@]}" -gt "$LIMIT" ] && echo "  … and $(( ${#RECORDS[@]} - LIMIT )) older sessions (raise with PULL_SESSION_LIMIT)."
   echo
@@ -266,9 +275,10 @@ pick_session() { # interactive arrow-key picker — TERMINAL ONLY (needs a TTY; 
     for rec in "${RECORDS[@]}"; do
       IFS=$'\t' read -r m root f <<< "$rec"
       sid="$(basename "$f" .jsonl)"
-      printf '%s\t%s  %s  %s · %s  |  %s  ↳ %s\n' \
-        "$sid" "$(session_flag "$f")" "$(session_name "$f")" "$(instance_label "$root")" \
-        "$(session_cwd "$f")" "$(session_size "$f")" "$(preview "$f")"
+      printf '%s\t%s  %s  ·  %s · %s · %s msgs · %s  ↳ %s\n' \
+        "$sid" "$(session_flag "$f")" "$(session_name "$f")" \
+        "$(basename "$(session_cwd "$f")")" "$(reltime "$m")" "$(session_msgs "$f")" \
+        "$(session_size "$f")" "$(preview "$f")"
     done
   )"
   choice="$(printf '%s\n' "$menu" | fzf --delimiter=$'\t' --with-nth=2.. --nth=2.. \
