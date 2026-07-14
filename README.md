@@ -1,10 +1,12 @@
 # pull-session
 
-A [Claude Code](https://claude.com/claude-code) plugin that pulls the context of **another active Claude Code chat** into your current one.
+**You've got three Claude Code chats open. One already figured this out — the one you're in has no idea.** Pull what it knows into this session, instead of copy-pasting a wall of transcript.
 
-Working across more than one Claude Code chat? When one of them works something out and you want *this* chat to know it, pull its summary in — no copy-pasting transcripts.
+A [Claude Code](https://claude.com/claude-code) plugin for working across multiple sessions.
 
 ## Install
+
+In a running Claude Code session, run:
 
 ```
 /plugin marketplace add imranctg16/claude-pull-session
